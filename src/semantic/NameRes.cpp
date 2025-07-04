@@ -102,7 +102,8 @@ void NameRes::visit(AssignStmt* stmt) {
 }
 
 void NameRes::visit(CompoundAssignStmt* stmt) {
-    // Implementation here
+    stmt->lhs->accept(this);
+    stmt->rhs->accept(this);
 }
 
 void NameRes::visit(ForStmt* stmt) {
@@ -126,27 +127,23 @@ void NameRes::visit(PrintStmt* stmt) {
 }
 
 void NameRes::visit(BreakStmt* stmt) {
-    if (stmt->exp) {
-        stmt->exp->accept(this);
-    }
+    stmt->exp->accept(this);
 }
 
 void NameRes::visit(ReturnStmt* stmt) {
-    if (stmt->exp) {
-        stmt->exp->accept(this);
-    }
+    stmt->exp->accept(this);
 }
 
 void NameRes::visit(ExpStmt* stmt) {
-    if (stmt->exp) {
-        stmt->exp->accept(this);
-    }
+    stmt->exp->accept(this);
 }
 
 void NameRes::visit(Fun* fun) {
     table->pushScope();
-    for (auto& p : fun->params) {
-        table->declare(p.id, {});
+    for (auto& param : fun->params) {
+        Value val; val.type=param.type;
+        if (!table->declare(param.id, val))
+            throw std::runtime_error("redeclaration on the same scope" + fun->line + ':' + fun->col);
     }
     fun->block->accept(this);
     table->popScope();
@@ -154,7 +151,11 @@ void NameRes::visit(Fun* fun) {
 
 void NameRes::visit(Program* program) {
     for (const auto& [id, fun]: program->funs) {
-        table->declare(id, {});
+        Value val{fun->type, true};
+        for (const auto& param : fun->params)
+            val.addType(param.type);
+        if (!table->declare(id, val))
+            throw std::runtime_error("redeclaration on the same scope" + fun->line + ':' + fun->col);
     }
     for (const auto& [id, fun]: program->funs) {
         fun->accept(this);

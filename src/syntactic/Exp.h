@@ -21,9 +21,9 @@ struct Value {
     // array of types for functions
     std::list<Type> types {};
 
-    bool fun;
-    bool ref;
-    bool mut;
+    bool fun {};
+    bool ref {};
+    bool mut {};
     // by default size = 0, otherwise, it's an array
     int size {};
     // for subscript expression
@@ -53,12 +53,17 @@ struct Value {
         : type(type), numericValues(std::move(numericValues)),
         ref(ref), mut(mut) {}
 
+    Value(Type type, bool fun=false)
+        : type(type), fun(fun) {}
+
     ~Value() = default;
 
     bool isArray();
     bool isFunction();
+    void addType(Type type);
 
     static Type stringToType(std::string type);
+    friend std::ostream& operator<<(std::ostream& out, const Value::Type& type);
     friend std::ostream& operator<<(std::ostream& out, const Value& var);
 };
 
