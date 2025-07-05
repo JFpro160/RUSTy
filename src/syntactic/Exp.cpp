@@ -5,6 +5,7 @@ Value::Type Value::stringToType(std::string type) {
     if (type == "bool") return BOOL;
     else if (type == "char") return CHAR;
     else if (type == "i32") return I32;
+    else if (type == "i64") return I64;
     else if (type == "str") return STR;
     else if (type == "()") return UNIT;
     throw std::runtime_error("invalid type: " + type);
@@ -14,6 +15,34 @@ bool Value::isArray() {
 }
 bool Value::isFunction() {
     return fun;
+}
+void Value::addType(Type type) {
+    types.push_back(type);
+}
+
+std::string Value::getId() const {
+    if (type == ID && !stringValues.empty())
+        return stringValues.front();
+    throw std::runtime_error("getId error");
+}
+
+Value::operator int() {
+    return numericValues.front();
+}
+
+std::ostream& operator<<(std::ostream& out, const Value::Type& type) {
+    switch(type) {
+        case Value::BOOL: out << "bool"; break;
+        case Value::CHAR: out << "char"; break;
+        case Value::I32: out << "i32"; break;
+        case Value::STR: out << "str"; break;
+        case Value::UNIT: out << "()"; break;
+        default: throw std::runtime_error(std::string("invalid type")
+                                          + (type==Value::UNDEFINED
+                                            ? "undefined"
+                                            : "id"));
+    }
+    return out;
 }
 std::ostream& operator<<(std::ostream& out, const Value& var) {
     if (var.size > 0) out << "[ ";
@@ -32,6 +61,7 @@ std::ostream& operator<<(std::ostream& out, const Value& var) {
             }
             break;
         case Value::I32:
+        case Value::I64:
             for (auto el : var.numericValues) {
                 out << el;
                 if (++i < var.size) out << ", ";

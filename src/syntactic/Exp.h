@@ -6,12 +6,13 @@
 #include <iostream>
 #include <string>
 #include <list>
+#include <utility>
 
 class Visitor;
 class CodeGen;
 
 struct Value {
-    enum Type { BOOL, CHAR, I32, STR, ID, UNIT, UNDEFINED};
+    enum Type { UNDEFINED, BOOL, CHAR, I32, I64, STR, ID, UNIT};
 
     Type type {};
     // in case of array has multiple values, otherwise only one
@@ -21,9 +22,10 @@ struct Value {
     // array of types for functions
     std::list<Type> types {};
 
-    bool fun;
-    bool ref;
-    bool mut;
+    bool fun {};
+    bool ref {};
+    bool mut {};
+    bool initialized {};
     // by default size = 0, otherwise, it's an array
     int size {};
     // for subscript expression
@@ -32,39 +34,49 @@ struct Value {
     int left {}, right {};
 
     Value() : type(UNDEFINED) {}
+    Value(Type type) : type(type) {}
 
     Value(Type type, std::string stringValue,
           bool ref=false, bool mut=false, bool fun=false)
-        : type(type), stringValues({stringValue}),
-        ref(ref), mut(mut) {}
+        : type(type), stringValues({std::move(stringValue)}),
+        ref(ref), mut(mut), initialized(true) {}
 
     Value(Type type, int numericValue,
           bool ref=false, bool mut=false, bool fun=false)
         : type(type), numericValues({numericValue}),
-        ref(ref), mut(mut) {}
+        ref(ref), mut(mut), initialized(true) {}
 
     Value(Type type, std::list<std::string> stringValues,
         bool ref=false, bool mut=false, bool fun=false)
         : type(type), stringValues(std::move(stringValues)),
-        ref(ref), mut(mut) {}
+        ref(ref), mut(mut), initialized(true) {}
 
     Value(Type type, std::list<int> numericValues,
         bool ref=false, bool mut=false, bool fun=false)
         : type(type), numericValues(std::move(numericValues)),
-        ref(ref), mut(mut) {}
+        ref(ref), mut(mut), initialized(true) {}
+
+    Value(Type type, bool fun=false)
+        : type(type), fun(fun), initialized(true) {}
 
     ~Value() = default;
 
     bool isArray();
     bool isFunction();
+    void addType(Type type);
+    std::string getId() const;
+
+    operator int();
 
     static Type stringToType(std::string type);
+    friend std::ostream& operator<<(std::ostream& out, const Value::Type& type);
     friend std::ostream& operator<<(std::ostream& out, const Value& var);
 };
 
 class Exp;
 
 class Stmt {
+    FRIENDS
 protected:
     int line;
     int col;
@@ -75,7 +87,7 @@ public:
     Stmt &operator=(Stmt &&) = delete;
     Stmt(int line, int col) : line(line), col(col) {}
     virtual ~Stmt() = 0;
-    virtual void accept(Visitor *visitor) = 0;
+    virtual Value accept(Visitor *visitor) = 0;
     virtual void print(std::ostream &out) = 0;
     friend std::ostream &operator<<(std::ostream &out, Stmt *stmt);
 };
@@ -85,6 +97,7 @@ class Block {
 
     int line;
     int col;
+    Value::Type type {};
     std::list<Stmt *> stmts;
 public:
     Block(int line, int col, std::list<Stmt *> stmts)
@@ -101,9 +114,11 @@ public:
 };
 
 class Exp {
+    FRIENDS
 protected:
     int line;
     int col;
+    Value::Type type{};
 public:
     Exp(int line, int col) : line(line), col(col) {}
     virtual ~Exp() = 0;
@@ -201,9 +216,11 @@ class IfExp : public Exp {
 public:
     class IfBranch {
         friend class IfExp;
+        FRIENDS
 
         Exp* cond;
         Block* block;
+        Value::Type type {};
         IfBranch(Exp *cond, Block *block) : cond(cond), block(block) {}
 
     public:
@@ -248,6 +265,7 @@ class LoopExp : public Exp {
     FRIENDS
 
     Block* block;
+    Value::Type type {};
 public:
     LoopExp(int line, int col, Block *block) 
         : Exp(line, col), block(block) {}
@@ -306,7 +324,7 @@ public:
 };
 
 class ArrayExp : public Exp {
-    friend class CodeGen;
+    FRIENDS
 
     std::list<Exp*> elements;
 public:
@@ -319,7 +337,7 @@ public:
 };
 
 class UniformArrayExp : public Exp {
-    friend class CodeGen;
+    FRIENDS
 
     Exp *value;
     Exp *size;

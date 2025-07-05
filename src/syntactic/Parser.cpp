@@ -155,9 +155,19 @@ std::pair<std::string, Fun*> Parser::parseFunction() {
                                  + debugInfo(currentToken()));
     }
 
+    Value::Type type = Value::UNDEFINED;
+    if (match(Token::ARROW)) {
+        if (!check(Token::TYPE)) {
+            throw std::runtime_error("expected type after arrow in function declaration\ngot: "
+                                     + debugInfo(currentToken()));
+        }
+        type = Value::stringToType(currentToken().content);
+        match(Token::TYPE);
+    }
+
     Block* block = parseBlock();
 
-    return {id, new Fun(line, col, params, block)};
+    return {id, new Fun(line, col, type, params, block)};
 }
 
 Exp* Parser::parseRhs() {
@@ -567,7 +577,7 @@ Exp* Parser::parseFactorExp() {
     else if (check(Token::STRING)) {
         std::string value = currentToken().content;
         match(Token::STRING);
-        return new Literal(line, col, Value(Value::STR, value));
+        return new Literal(line, col, Value(Value::STR, value, true));
     }
     else if (check(Token::ID)) {
         std::string id = currentToken().content;
