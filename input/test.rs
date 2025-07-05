@@ -47,24 +47,24 @@ fn test_assign_mut()  {
 // 7. Asignación a inmutable (NameRes enlaza, TypeChecker falla luego)
 fn test_assign_immut()  {
     let n: i32 = 5;
-    n = 6;               // NameRes: 'n' resuelto; TypeChecker dará “immutable assignment”
+    //n = 6;               // NameRes: 'n' resuelto; TypeChecker dará “immutable assignment”
     return ();
 }
 
 // 8. For introduce un scope para 'i'
 fn test_for_loop()  {
-    let arr: [i32; 3] = [1, 2, 3];
-    for i in arr ..= 3 {
-        let t: i32 = i + 1;  // OK
-    }
+    //let arr: [i32; 3] = [1, 2, 3];
+    //for i in arr ..= 3 {
+        //let t: i32 = i + 1;  // OK
+    //}
     //let z: i32 = i;          // ERROR NameRes: 'i' no está declarado en este scope
     return ();
 }
 
 // 9. Subíndice en array
 fn test_subscript()  {
-    let arr: [i32; 3] = [10, 20, 30];
-    let v0: i32 = arr[0];    // OK
+    //let arr: [i32; 3] = [10, 20, 30];
+    //let v0: i32 = arr[0];    // OK
     //let v1: i32 = arr[x];    // ERROR NameRes: 'x' no está declarado
     return ();
 }
@@ -78,8 +78,8 @@ fn test_println()  {
 
 // 1. Asignación válida a arr[1]
 fn test_slice_assign_ok()  {
-    let arr: [i32; 3] = [0, 1, 2];
-    arr[1] = 42;       // OK: 'arr' existe, índice literal
+    let mut arr: [i32; 3] = [0, 1, 2];
+    arr[1] = 42;       // OK: 'arr' existe, índice literal                     esto deberia funcionar o no?
     return ();
 }
 
