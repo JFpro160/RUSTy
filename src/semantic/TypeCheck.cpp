@@ -28,16 +28,38 @@ void TypeCheck::assertType(Value::Type from, Value::Type to, int line, int col) 
     }
 }
 
+void TypeCheck::assertStringRef(const Value& val, int line, int col) {
+    if (val.type == Value::STR && !val.ref) {
+        throw std::runtime_error("string type must be referenced at " +
+                                 std::to_string(line) + ':' +
+                                 std::to_string(col));
+    }
+}
+
+std::string TypeCheck::typeToFormat(Value::Type type) {
+    switch (type) {
+        case Value::CHAR: return "%c";
+        case Value::BOOL:
+        case Value::I32:  return "%d";
+        case Value::I64:  return "%ld";
+        case Value::STR:  return "%s";
+        default:          return "%d";
+    }
+}
+
+
 TypeCheck::~TypeCheck() = default;
 
 // Visit methods for expressions
 Value TypeCheck::visit(Block* block) {
+    ++blockDepth;
     table->pushScope();
     Value::Type last = Value::UNIT;
     for (auto stmt : block->stmts) {
         last = stmt->accept(this).type;
     }
     table->popScope();
+    --blockDepth;
     block->type = last;
     return {last};
 }
@@ -111,8 +133,12 @@ Value TypeCheck::visit(Variable* exp) {
 
 Value TypeCheck::visit(FunCall* exp) {
     Value fn = lookup(exp->id);
-    if (fn.types.size() != exp->args.size())
-        throw std::runtime_error("incorrect argument count at " +
+    if (fn.types.size() < exp->args.size())
+        throw std::runtime_error("too many arguments for " + exp->id + " at " +
+                                 std::to_string(exp->line) + ':' +
+                                 std::to_string(exp->col));
+    if (fn.types.size() > exp->args.size())
+        throw std::runtime_error("not enough arguments for " + exp->id + " at " +
                                  std::to_string(exp->line) + ':' +
                                  std::to_string(exp->col));
     auto it = fn.types.begin();
@@ -204,9 +230,20 @@ Value TypeCheck::visit(ArrayExp* exp) {
 
 Value TypeCheck::visit(UniformArrayExp* exp) {
     Value v = exp->value->accept(this);
+    assertStringRef(v, exp->line, exp->col);
     Value s = exp->size->accept(this);
     Exp* size = exp->size;
     assertType(s.type, Value::I32, size->line, size->col);
+    if (s.numericValues.empty()) {
+        throw std::runtime_error("array size must be constant at " +
+                                 std::to_string(size->line) + ':' +
+                                 std::to_string(size->col));
+    }
+    if (s.numericValues.front() <= 0) {
+        throw std::runtime_error("array size must be positive at " +
+                                 std::to_string(size->line) + ':' +
+                                 std::to_string(size->col));
+    }
     exp->type = v.type;
     Value val{v.type};
     val.size = s.numericValues.front();
@@ -215,12 +252,20 @@ Value TypeCheck::visit(UniformArrayExp* exp) {
 
 // Visit methods for statements
 Value TypeCheck::visit(DecStmt* stmt) {
+    if (stmt->var.type == Value::STR)
+        assertStringRef(stmt->var, stmt->line, stmt->col);
+    if (stmt->var.size < 0)
+        throw std::runtime_error("array size must be positive at " +
+                                 std::to_string(stmt->line) + ':' +
+                                 std::to_string(stmt->col));
     Value rhs{stmt->var.type};
     if (stmt->rhs) {
         rhs = stmt->rhs->accept(this);
         if (stmt->var.type == Value::UNDEFINED)
             stmt->var.type = rhs.type;
         assertType(rhs.type, stmt->var.type, stmt->line, stmt->col);
+        if (stmt->var.type == Value::STR)
+            assertStringRef(rhs, stmt->line, stmt->col);
         stmt->var.initialized = true;
     } else {
         stmt->var.initialized = false;
@@ -236,16 +281,20 @@ Value TypeCheck::visit(AssignStmt* stmt) {
     Value lhs = stmt->lhs->accept(this);
     lhsContext = false;
     Value rhs = stmt->rhs->accept(this);
+    assertStringRef(rhs, stmt->line, stmt->col);
     if (lhsIsVariable && lhsEntry) {
         if (!lhsEntry->initialized) {
             if (lhsEntry->type == Value::UNDEFINED)
                 lhsEntry->type = rhs.type;
+            lhsEntry->ref = rhs.ref;
             if (rhs.size > 0)
                 lhsEntry->size = rhs.size;
             lhsEntry->initialized = true;
         } else {
             assertMut(*lhsEntry, stmt->line, stmt->col);
             assertType(rhs.type, lhsEntry->type, stmt->line, stmt->col);
+            if (lhsEntry->type == Value::STR)
+                assertStringRef(*lhsEntry, stmt->line, stmt->col);
         }
     } else {
         assertMut(lhs, stmt->line, stmt->col);
@@ -267,7 +316,9 @@ Value TypeCheck::visit(ForStmt* stmt) {
     stmt->start->accept(this);
     stmt->end->accept(this);
     table->pushScope();
-    declare(stmt->id, Value{Value::I32});
+    Value value (Value::I32);
+    value.initialized = true;
+    declare(stmt->id, value);
     stmt->block->accept(this);
     table->popScope();
     return {Value::UNIT};
@@ -285,12 +336,48 @@ Value TypeCheck::visit(WhileStmt* stmt) {
 }
 
 Value TypeCheck::visit(PrintStmt* stmt) {
-    for (auto exp : stmt->args) exp->accept(this);
+    std::string parsed;
+    size_t pos = 0;
+    auto it = stmt->args.begin();
+
+    const std::string& input = stmt->strLiteral;
+    while (true) {
+        size_t open = input.find('{', pos);
+        if (open == std::string::npos) {
+            parsed += input.substr(pos);
+            break;
+        }
+
+        parsed += input.substr(pos, open - pos);
+
+        if (open + 1 >= input.size() || input[open + 1] != '}') {
+            throw std::runtime_error(
+                "unsupported format string at " + std::to_string(stmt->line) + ":" + std::to_string(stmt->col));
+        }
+
+        if (it == stmt->args.end()) {
+            throw std::runtime_error(
+                "not enough arguments for print at " + std::to_string(stmt->line) + ":" + std::to_string(stmt->col));
+        }
+
+        Value v = (*it)->accept(this);
+        parsed += typeToFormat(v.type);
+
+        ++it;
+        pos = open + 2;
+    }
+
+    if (it != stmt->args.end()) {
+        throw std::runtime_error(
+            "too many arguments for print at " + std::to_string(stmt->line) + ":" + std::to_string(stmt->col));
+    }
+
+    stmt->strLiteral = parsed + "\\n";
     return {Value::UNIT};
 }
 
 Value TypeCheck::visit(BreakStmt* stmt) {
-    if (getScopeDepth() <= scopeDepth)
+    if (blockDepth <= 0)
         throw std::runtime_error("break outside loop at " +
                                  std::to_string(stmt->line) + ':' +
                                  std::to_string(stmt->col));
@@ -301,6 +388,10 @@ Value TypeCheck::visit(BreakStmt* stmt) {
 }
 
 Value TypeCheck::visit(ReturnStmt* stmt) {
+    if (getScopeDepth() == 0)
+        throw std::runtime_error("return outside function at " +
+                                 std::to_string(stmt->line) + ':' +
+                                 std::to_string(stmt->col));
     Value r{Value::UNIT};
     if (stmt->exp) r = stmt->exp->accept(this);
     assertType(r.type, currentReturnType, stmt->line, stmt->col);
@@ -316,7 +407,7 @@ Value TypeCheck::visit(ExpStmt* stmt) {
 
 // Visit methods for functions and programs
 Value TypeCheck::visit(Fun* fun) {
-    scopeDepth = getScopeDepth();
+    --blockDepth;
     table->pushScope();
     currentReturnType = fun->type != Value::UNDEFINED ? fun->type : Value::UNIT;
     for (const auto& p : fun->params) {
@@ -326,6 +417,7 @@ Value TypeCheck::visit(Fun* fun) {
     if (fun->type == Value::UNDEFINED)
         fun->type = r.type;
     table->popScope();
+    ++blockDepth;
     return {Value::UNIT};
 }
 

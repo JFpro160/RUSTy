@@ -79,6 +79,7 @@ private:
 
     void mov();
     void movz();
+    void movs();
     // arithmetic
     void add();
     void inc();
@@ -105,14 +106,20 @@ private:
     string LCLabel();
     void LBLabel();
     void LELabel();
+    void LILabel();
+    void LIELabel();
+    string endI(string label);
     void LFBLabel();
     void LFELabel();
     string end(string label);
+    int getOffset(string label);
 
     int lb {};
     int lc {};
     int lf {};
+    int li {};
     stack<int> lbs;
+    stack<int> lis;
     stack<int> bp {};
     stack<string> labels {};
     int offset {};
@@ -128,8 +135,9 @@ public:
     CodeGen(SymbolTable* table, std::ostream& out): Visitor(table), out(out){}
     explicit CodeGen(std::ostream& out): Visitor(nullptr), out(out){}
     ~CodeGen() override;
-    static int typeLen(Value::Type type);
     static int typeLen(L lvl);
+    static int typeLen(Value value);
+    static int typeLen(Value::Type type);
     Value visit(Block* block) override;
     Value visit(BinaryExp* exp) override;
     Value visit(UnaryExp* exp) override;
