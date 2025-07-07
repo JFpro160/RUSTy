@@ -163,6 +163,8 @@ void CodeGen::add() {
     out << "add" << r->lvl << ' ' << l << ", " << r << '\n';
 }
 void CodeGen::addSP(int off) {
+    if (off == 0) return;
+
     l = new Const(Value(Value::I64, off));
     r = new Reg("sp");
     out << "add" << r->lvl << ' ' << l << ", " << r << '\n';
@@ -175,6 +177,7 @@ void CodeGen::sub() {
     out << "sub" << r->lvl << ' ' << l << ", " << r << '\n';
 }
 void CodeGen::subSP(int off) {
+    if (off == 0) return;
     l = new Const(Value(Value::I64, off));
     r = new Reg("sp");
     out << "sub" << r->lvl << ' ' << l << ", " << r << '\n';
@@ -221,7 +224,7 @@ void CodeGen::push() {
         mov();
     }
     out << "push" << r->lvl << ' ' << r << '\n';
-    offset += typeLen(r->lvl);
+    offset += typeLen(Q);
 }
 void CodeGen::pop() {
     if (typeLen(r->lvl) < typeLen(Q)) {
@@ -269,7 +272,6 @@ void CodeGen::cmov(C cond) {
 }
 void CodeGen::call(string label) {
     out << "call " << label << "\n";
-    offset += typeLen(Q);
 }
 void CodeGen::enter() {
     r = new Reg("bp");
@@ -289,7 +291,6 @@ void CodeGen::leave() {
 }
 void CodeGen::ret() {
     out << "ret\n";
-    offset -= typeLen(Q);
 }
 string CodeGen::LCLabel() {
     string label = ".LC" + to_string(++lc);
@@ -308,18 +309,23 @@ void CodeGen::LELabel() {
     lbs.pop();
     labels.pop();
 }
-void CodeGen::LILabel() {
-    string label = ".LI" + to_string(++li);
+string CodeGen::LIBLabel() {
+    string label = ".LIB" + to_string(++lie);
     out << label << ":\n";
-    lis.push(li);
+    lis.push(lie);
+    return label;
+}
+void CodeGen::LIBLabel2() {
+    string label = ".LIXB" + to_string(++lib);
+    out << label << ":\n";
 }
 void CodeGen::LIELabel() {
     string label = ".LIE" + to_string(lis.top());
     out << label << ":\n";
     lis.pop();
 }
-string CodeGen::endI(string label) {
-    return ".LIE" + label.substr(3);
+string CodeGen::nextIf() {
+    return ".LIXB" + to_string(lib + 1);
 }
 void CodeGen::LFBLabel() {
     string label = ".LFB" + to_string(++lf);
@@ -332,11 +338,11 @@ void CodeGen::LFELabel() {
     labels.pop();
 }
 string CodeGen::end(string label) {
-    if (label[1] == 'F') {
-        label[2] = 'E';
+    if (label[2] == 'F' || label[2] == 'I') {
+        label[3] = 'E';
     }
     else {
-        label[1] = 'E';
+        label[2] = 'E';
     }
     return label;
 }
@@ -382,36 +388,20 @@ Value CodeGen::visit(Block* block) {
 
 Value CodeGen::visit(BinaryExp* exp) {
     if (init) {
-        auto lhs = exp->lhs->accept(this);
-
-        L typeLen = typeToL(lhs.type);
-
-        if (lhs.ref) {
-            Reg* reg = new Reg();
-            l = new Mem(reg, 0);
-            r = new Reg(typeLen);
-            mov();
-        }
+        auto lhs = accept(exp->lhs);
+        L lvl = typeToL(lhs.type);
         push();
 
-        auto rhs = exp->rhs->accept(this);
-
-        if (rhs.ref) {
-            Reg* reg = new Reg();
-            l = new Mem(reg, 0);
-            r = new Reg(typeLen);
-            mov();
-        }
-
-        l = new Reg(typeLen);
-        r = new Reg("c", typeLen);
+        auto rhs = accept(exp->rhs);
+        l = new Reg(lvl);
+        r = new Reg("c", lvl);
         mov();
 
-        r = new Reg(typeLen);
+        r = new Reg(lvl);
         pop();
 
-        l = new Reg("c", typeLen);
-        r = new Reg(typeLen);
+        l = new Reg("c", lvl);
+        r = new Reg(lvl);
         switch (exp->op) {
             case BinaryExp::LAND:
                 land();
@@ -475,16 +465,8 @@ Value CodeGen::visit(BinaryExp* exp) {
 
 Value CodeGen::visit(UnaryExp* exp) {
     if (init) {
-        Value value = exp->exp->accept(this);
-
+        Value value = accept(exp->exp);
         L typeLen = typeToL(value.type);
-
-        if (value.ref) {
-            Reg* reg = new Reg();
-            l = new Mem(reg, 0);
-            r = new Reg(typeLen);
-            mov();
-        }
 
         switch (exp->op) {
             case UnaryExp::LNOT:
@@ -549,20 +531,25 @@ Value CodeGen::visit(FunCall* exp) {
             s.push(arg);
         }
 
+        int bytes {};
+
+        Reg* reg = new Reg("bp");
         while (!s.empty()) {
             auto arg = s.top();
             s.pop();
 
-            Value value = arg->accept(this);
-            offset += typeLen(value.type);
+            Value value = accept(arg);
+            L lvl = typeToL(value.type);
+            bytes += typeLen(lvl);
 
-            r = new Reg();
-            r->lvl = valueToL(value);
-            push();
+            l = new Reg(lvl);
+            r = new Mem(reg, bp.top() - (offset + bytes), lvl);
+            mov();
         }
 
-        prevOff = offset;
+        subSP(bytes);
         call(exp->id);
+        addSP(bytes);
     }
     else {
         for (auto arg : exp->args) {
@@ -574,51 +561,53 @@ Value CodeGen::visit(FunCall* exp) {
 
 Value CodeGen::visit(IfExp* exp) {
     if (init) {
-        int id = ++li;
-        string endLabel = ".LIE" + to_string(id);
+        string label = LIBLabel();
 
-        exp->ifBranch->cond->accept(this);
-        l = new Const(Value(Value::I64, 0));
-        r = new Reg();
+        L lvl = B;
+
+        Value value = accept(exp->ifBranch->cond);
+
+        l = new Const(Value(Value::BOOL, 0));
+        r = new Reg(lvl);
         cmp();
 
-        string nextLabel = endLabel;
+        string nextLabel = end(label);
         if (!exp->elseIfBranches.empty() || exp->elseBranch) {
-            nextLabel = ".LI" + to_string(++li);
+            nextLabel = nextIf();
         }
         jmp(nextLabel, EQ);
 
         exp->ifBranch->block->accept(this);
-        jmp(endLabel);
 
-        if (!exp->elseIfBranches.empty() || exp->elseBranch) {
-            out << nextLabel << ":\n";
-            auto it = exp->elseIfBranches.begin();
-            while (it != exp->elseIfBranches.end()) {
-                IfExp::IfBranch* br = *it;
-                ++it;
-                string afterLabel = (it != exp->elseIfBranches.end() || exp->elseBranch)
-                        ? ".LI" + to_string(++li)
-                        : endLabel;
+        if (nextLabel != end(label)) jmp(end(label));
 
-                br->cond->accept(this);
-                l = new Const(Value(Value::I64, 0));
-                r = new Reg();
-                cmp();
-                jmp(afterLabel, EQ);
+        auto it = exp->elseIfBranches.begin();
+        while (it != exp->elseIfBranches.end()) {
+            LIBLabel2();
 
-                br->block->accept(this);
-                jmp(endLabel);
-
-                out << afterLabel << ":\n";
+            IfExp::IfBranch* br = *it;
+            nextLabel = end(label);
+            if (++it != exp->elseIfBranches.end() || exp->elseBranch) {
+                nextLabel = nextIf();
             }
 
-            if (exp->elseBranch) {
-                exp->elseBranch->block->accept(this);
-            }
+            accept(br->cond);
+
+            l = new Const(Value(Value::BOOL, 0));
+            r = new Reg(lvl);
+            cmp();
+            jmp(nextLabel, EQ);
+
+            br->block->accept(this);
+
+            if (nextLabel != end(label)) jmp(end(label));
+        }
+        if (exp->elseBranch) {
+            LIBLabel2();
+            exp->elseBranch->block->accept(this);
         }
 
-        out << endLabel << ":\n";
+        LIELabel();
         return {exp->type};
     }
     else {
@@ -627,8 +616,8 @@ Value CodeGen::visit(IfExp* exp) {
             branch->block->accept(this);
         }
         if (exp->elseBranch) exp->elseBranch->block->accept(this);
+        return {};
     }
-    return {};
 }
 
 Value CodeGen::visit(LoopExp* exp) {
@@ -661,7 +650,8 @@ Value CodeGen::visit(SliceExp* exp) {
 Value CodeGen::visit(ReferenceExp* exp) {
     if (init) {
         auto value = exp->exp->accept(this);
-        value.ref = true;
+        value.type = Value::I64;
+        value.ref = false;
         return value;
     }
     else {
@@ -676,7 +666,7 @@ Value CodeGen::visit(ArrayExp* exp) {
         r->lvl = typeToL(exp->type);
 
         for (auto el : exp->elements) {
-            auto value = el->accept(this);
+            auto value = accept(el);
             push();
         }
         auto ret = Value(exp->type);
@@ -693,11 +683,11 @@ Value CodeGen::visit(ArrayExp* exp) {
 
 Value CodeGen::visit(UniformArrayExp* exp) {
     if (init) {
-        auto size = exp->size->accept(this);
+        auto size = accept(exp->size);
         r = new Reg();
         push();
 
-        auto value = exp->value->accept(this);
+        auto value = accept(exp->value);
         auto val = new Reg();
         val->lvl = valueToL(value);
 
@@ -747,7 +737,7 @@ Value CodeGen::visit(DecStmt* stmt) {
         table->declare(stmt->id, val);
 
         if (stmt->rhs) {
-            auto rhs = stmt->rhs->accept(this);
+            auto rhs = accept(stmt->rhs);
             Reg* reg;
 
             L len = typeToL(value.type);
@@ -790,7 +780,7 @@ Value CodeGen::visit(AssignStmt* stmt) {
         r = new Reg();
         push();
 
-        auto rhs = stmt->rhs->accept(this);
+        auto rhs = accept(stmt->rhs);
 
         r = new Reg("c");
         pop();
@@ -812,39 +802,31 @@ Value CodeGen::visit(CompoundAssignStmt* stmt) {
         auto lhs = stmt->lhs->accept(this);
 
         L ptrLen = valueToL(lhs);
-        L typeLen = typeToL(lhs.type);
+        L lvl = typeToL(lhs.type);
 
         // store temporarily address of lhs
         l = new Reg(ptrLen);
         r = new Reg("b", ptrLen);
         mov();
 
-        if (lhs.ref) {
-            Reg* reg = new Reg(ptrLen);
-            l = new Mem(reg, 0);
-            r = new Reg(typeLen);
-            mov();
-        }
+        // push value in address
+        Reg* reg = new Reg(ptrLen);
+        l = new Mem(reg, 0);
+        r = new Reg(lvl);
+        mov();
         push();
 
-        auto rhs = stmt->rhs->accept(this);
+        auto rhs = accept(stmt->rhs);
 
-        if (rhs.ref) {
-            Reg* reg = new Reg(ptrLen);
-            l = new Mem(reg, 0);
-            r = new Reg(typeLen);
-            mov();
-        }
-
-        l = new Reg(typeLen);
-        r = new Reg("c", typeLen);
+        l = new Reg(lvl);
+        r = new Reg("c", lvl);
         mov();
 
-        r = new Reg(typeLen);
+        r = new Reg(lvl);
         pop();
 
-        l = new Reg("c", typeLen);
-        r = new Reg(typeLen);
+        l = new Reg("c", lvl);
+        r = new Reg(lvl);
 
         switch (stmt->op) {
             case BinaryExp::PLUS:
@@ -864,8 +846,8 @@ Value CodeGen::visit(CompoundAssignStmt* stmt) {
         }
 
         // store result of operation in previously cached address
-        l = new Reg(typeLen);
-        Reg* reg = new Reg("b");
+        l = new Reg(lvl);
+        reg = new Reg("b");
         r = new Mem(reg, 0, ptrLen);
         mov();
     }
@@ -876,26 +858,27 @@ Value CodeGen::visit(ForStmt* stmt) {
     if (init) {
         table->pushScope();
 
-        auto value = stmt->start->accept(this);
+        auto value = accept(stmt->start);
+        L lvl = valueToL(value);
 
-        r = new Reg();
-        r->lvl = valueToL(value);
-        push();
-        table->declare(stmt->id, Value(Value::ID, offset));
+        subSP(typeLen(lvl));
+        table->declare(stmt->id, Value(value.type, offset, true));
+
         int off = getOffset(stmt->id);
 
+        l = new Reg(lvl);
         Reg* reg = new Reg("bp");
-        auto it = new Mem(reg, off);
+        auto it = new Mem(reg, off, lvl);
+        r = it;
+        mov();
 
         LBLabel();
-        value = stmt->end->accept(this);
-
+        value = accept(stmt->end);
         l = new Reg(valueToL(value));
         r = it;
         cmp();
 
-        jmp(end(labels.top()), 
-            stmt->inclusive ? LE : LT);
+        jmp(end(labels.top()), stmt->inclusive ? GT : GE);
 
         stmt->block->accept(this);
 
@@ -904,10 +887,10 @@ Value CodeGen::visit(ForStmt* stmt) {
         jmp(labels.top());
 
         LELabel();
-        r = it;
-        pop();
+        addSP(typeLen(lvl));
 
         table->popScope();
+
         return Value(Value::UNIT, 0);
     }
     else {
@@ -920,7 +903,7 @@ Value CodeGen::visit(WhileStmt* stmt) {
     if (init) {
         LBLabel();
 
-        auto value = stmt->cond->accept(this);
+        auto value = accept(stmt->cond);
         l = new Const(Value(Value::I64, 0));
         r = new Reg();
         cmp();
@@ -951,36 +934,27 @@ Value CodeGen::visit(PrintStmt* stmt) {
 
         auto it2 = regs.begin();
         for (auto it = stmt->args.begin(); it != stmt->args.end(); ++it, ++it2) {
-            Value value = (*it)->accept(this);
+            Value value = accept(*it);
 
-            L typeLen = typeToL(value.type);
+            L lvl = typeToL(value.type);
 
-            if (value.ref) {
-                reg = new Reg();
-                l = new Mem(reg, 0);
-            }
-            else {
-                l = new Reg(typeLen);
-            }
-            Reg* valReg = new Reg(typeLen);
-            r = valReg;
-            mov();
+            Reg* valReg = new Reg(lvl);
 
             if (value.type == Value::BOOL) {
                 // bool value in valReg -> convert to pointer to "true"/"false"
-                Reg* regTrue = new Reg("r10");
+                Reg* regTrue = new Reg("r11");
                 reg = new Reg("ip");
                 l = new Mem(reg, boolTrueLabel);
                 r = regTrue;
                 lea();
 
-                Reg* regFalse = new Reg("r11");
+                Reg* regFalse = new Reg("r12");
                 reg = new Reg("ip");
                 l = new Mem(reg, boolFalseLabel);
                 r = regFalse;
                 lea();
 
-                l = new Const(Value(Value::I64, 0));
+                l = new Const(Value(Value::BOOL, 0));
                 r = valReg;
                 cmp();
 
@@ -989,17 +963,16 @@ Value CodeGen::visit(PrintStmt* stmt) {
                 cmov(EQ);
 
                 l = regTrue;
-                r = new Reg(*it2);
+                r = new Reg(*it2, Q);
                 mov();
             } else {
                 l = valReg;
-                r = new Reg(*it2);
+                r = new Reg(*it2, lvl);
                 mov();
             }
         }
 
-        int argCnt = stmt->args.size();
-        l = new Const(Value(Value::I64, argCnt));
+        l = new Const(Value(Value::I64, 0));
         r = new Reg();
         mov();
 
@@ -1032,16 +1005,18 @@ Value CodeGen::visit(BreakStmt* stmt) {
 
 Value CodeGen::visit(ReturnStmt* stmt) {
     if (init) {
+        Value value;
         if (stmt->exp) {
-            return stmt->exp->accept(this);
+            value = stmt->exp->accept(this);
         }
         else {
             Value value = Value(Value::UNIT, 0);
             l = new Const(value);
             r = new Reg("a", l->lvl);
             mov();
-            return value;
         }
+        jmp(end(curFun));
+        return value;
     }
     else {
         stmt->exp->accept(this);
@@ -1066,22 +1041,17 @@ Value CodeGen::visit(ExpStmt* stmt) {
 // Visit methods for functions and programs
 Value CodeGen::visit(Fun* fun) {
     if (init) {
-        table->pushScope();
-
+        int off = offset - typeLen(Q); // call push
         int len = {};
 
         for (auto param : fun->params) {
-            len += typeLen(param.type);
-            offset += typeLen(param.type);
-
-            Value value = Value(param.type, prevOff - len);
+            Value value = Value(param.type, off - len);
             value.ref = true;
             table->declare(param.id, value);
+            len += typeLen(param.type);
         }
 
         fun->block->accept(this);
-
-        table->popScope();
 
         return Value(fun->type);
     }
@@ -1114,7 +1084,6 @@ void CodeGen::visit(Program* program) {
         table->declare(id, value);
 
         init = false;
-        out << ".section .rodata\n";
         fun->accept(this);
 
         // prologue
@@ -1123,15 +1092,75 @@ void CodeGen::visit(Program* program) {
         out << ".globl " << id << '\n';
         out << ".type " << id << ", @function\n";
         out << id << ":\n";
+
+        table->pushScope();
+
         LFBLabel();
+
+        curFun = labels.top();
 
         fun->accept(this);
 
         // epilogue
         LFELabel();
         ret();
+
+        table->popScope();
     }
 
     table->popScope();
     out << ".section .note.GNU-stack,\"\",@progbits"<<endl;
+}
+
+Value CodeGen::accept(Block* block) {
+    Value value = block->accept(this);
+
+    if (value.ref) {
+        Reg* reg = new Reg();
+        l = new Mem(reg, 0);
+        r = new Reg(typeToL(value.type));
+        mov();
+    }
+
+    value.ref = false;
+    return value;
+}
+Value CodeGen::accept(Exp* exp) {
+    Value value = exp->accept(this);
+
+    if (value.ref) {
+        Reg* reg = new Reg();
+        l = new Mem(reg, 0);
+        r = new Reg(typeToL(value.type));
+        mov();
+        value.ref = false;
+    }
+
+    return value;
+}
+Value CodeGen::accept(Stmt* stmt) {
+    Value value = stmt->accept(this);
+
+    if (value.ref) {
+        Reg* reg = new Reg();
+        l = new Mem(reg, 0);
+        r = new Reg(typeToL(value.type));
+        mov();
+        value.ref = false;
+    }
+
+    return value;
+}
+Value CodeGen::accept(Fun* fun) {
+    Value value = fun->accept(this);
+
+    if (value.ref) {
+        Reg* reg = new Reg();
+        l = new Mem(reg, 0);
+        r = new Reg(typeToL(value.type));
+        mov();
+        value.ref = false;
+    }
+
+    return value;
 }

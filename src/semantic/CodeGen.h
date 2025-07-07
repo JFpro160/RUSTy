@@ -124,9 +124,10 @@ private:
     string LCLabel();
     void LBLabel();
     void LELabel();
-    void LILabel();
+    string LIBLabel();
+    void LIBLabel2();
     void LIELabel();
-    string endI(string label);
+    string nextIf();
     void LFBLabel();
     void LFELabel();
     string end(string label);
@@ -135,13 +136,14 @@ private:
     int lb {};
     int lc {};
     int lf {};
-    int li {};
+    int lib {};
+    int lie {};
     stack<int> lbs;
     stack<int> lis;
     stack<int> bp {};
     stack<string> labels {};
+    string curFun {};
     int offset {};
-    int prevOff {};
     bool init {};
     Operand* l;
     Operand* r;
@@ -186,6 +188,10 @@ public:
     Value visit(ExpStmt* stmt) override;
     Value visit(Fun* fun) override;
     void visit(Program* program) override;
+    Value accept(Block* block);
+    Value accept(Exp* exp);
+    Value accept(Stmt* stmt);
+    Value accept(Fun* fun);
 };
 
 #endif //RUSTY_GENCODE_H
